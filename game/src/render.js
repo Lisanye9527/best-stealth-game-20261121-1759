@@ -354,6 +354,14 @@ function drawGuard(ctx, guard, time) {
 
 function drawPlayer(ctx, player) {
   shadowEllipse(ctx, player.x, player.y, player.radius);
+  if (player.sneaking) {
+    // A faint ring so the player can read at a glance that sneak is on.
+    ctx.strokeStyle = 'rgba(45, 212, 191, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius + 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   const squash = player.sneaking ? 0.88 : 1;
   ctx.save();
   ctx.translate(player.x, player.y);

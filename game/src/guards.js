@@ -16,7 +16,7 @@ const BASE_PATROL_SPEED = 62; // px per second before the level's multiplier
 const CONE_RAYS = 28; // rays fanned across the cone to shape its polygon
 
 export class Guard {
-  constructor(definition, grid) {
+  constructor(definition, grid, index = 0) {
     this.grid = grid;
     this.waypoints = definition.path.map(([tx, ty]) => ({
       x: (tx + 0.5) * TILE,
@@ -31,9 +31,10 @@ export class Guard {
     this.facing = Math.atan2(next.y - this.y, next.x - this.x);
     this.state = 'patrol'; // 'patrol' | 'pause'
     this.waited = 0;
-    this.scanPhase = Math.random() * Math.PI * 2;
+    this.scanPhase = index * 1.7; // fixed per post, so a staged screenshot replays the same sweep
     this.alert = 0; // 0 calm .. 1 has eyes on the courier right now
     this.stepAccumulator = 0; // distance walked since the last footstep
+    this.strideBank = 0; // px walked since the last warden footstep sound
   }
 
   // Direction the lamp points while paused: a slow sweep around the heading

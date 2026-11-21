@@ -40,7 +40,7 @@ const game = {
     const { start, exits } = scanLevel(this.level);
     this.exits = exits;
     this.player = new Player(start);
-    this.guards = this.level.guards.map((def) => new Guard(def, this.grid));
+    this.guards = this.level.guards.map((def, i) => new Guard(def, this.grid, i));
     this.detection = 0;
     this.everSpotted = false;
     this.seenNow = false;
@@ -136,7 +136,7 @@ function frame(now) {
     game.elapsed += dt;
     for (const guard of game.guards) {
       guard.update(dt, time);
-      guard.strideBank = (guard.strideBank ?? 0) + guard.stepAccumulator;
+      guard.strideBank += guard.stepAccumulator;
       if (guard.strideBank > 26) {
         guard.strideBank = 0;
         const d = Math.hypot(guard.x - game.player.x, guard.y - game.player.y);
