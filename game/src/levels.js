@@ -1,84 +1,108 @@
-// Quiet Vault — the two floors of the archive and the wardens who patrol them.
+// Quiet Vault — the two floors.
 //
-// Grid legend:
-//   '#' stone wall        — blocks walking and sight
-//   'C' packing crate     — cover: blocks walking and sight
-//   '=' bookcase          — cover: blocks walking and sight
-//   ':' shadowed floor    — walkable; detection fills slower here
-//   '.' lamplit floor     — walkable
-//   'P' courier's entry   — walkable floor
-//   'E' exit door         — reach it unseen to clear the floor
-//
-// Guard patrols are waypoint lists in tile coordinates. A warden walks the
-// loop at `speed` (a multiplier on the base patrol speed), waits `pause`
-// seconds at each waypoint, and sweeps his lamp while he waits.
+// A floor is drawn as text: '#' wall, '.' open floor, 'c' crate,
+// 's' hatched shadow, 'P' where the courier starts, 'E' the green
+// exit door. Patrols are tile waypoints a warden walks in order, then
+// loops. buildFloor turns the text into the grid the game plays on
+// and complains loudly if a floor is ragged or missing its start or
+// its exit, so a typo fails at boot instead of mid-game.
 
-export const LEVELS = [
-  {
-    name: 'Floor One — The Reading Room',
-    brief: 'Cross the reading room and slip out of the east door, unseen.',
-    grid: [
-      '########################',
-      '#P.....#.......#.......#',
-      '#......#...C...#...:...#',
-      '#..##..#...C...#.......#',
-      '#..##......C...##.##...#',
-      '#......##.##...........#',
-      '#..==......##..C.......#',
-      '#..==..##......C...#...#',
-      '#......##..:.......#..E#',
-      '#..:.......##..C...#...#',
-      '#......##......C.......#',
-      '#..C...##..##......##..#',
-      '#..C.......##..:.......#',
-      '#......##......##......#',
-      '########################',
-    ],
-    guards: [
-      { path: [[13, 1], [13, 4]], speed: 1.0, pause: 1.1 },
-      { path: [[20, 4], [20, 10]], speed: 0.9, pause: 1.3 },
-      { path: [[5, 12], [10, 12]], speed: 1.05, pause: 0.9 },
-    ],
-  },
-  {
-    name: 'Floor Two — The Vault',
-    brief: 'The strongroom door is guarded twice over. Patience, courier.',
-    grid: [
-      '########################',
-      '#P..#......#.....#.....#',
-      '#...#..CC..#..C..#..:..#',
-      '#...#..CC..#..C.....##.#',
-      '##.##......##.###......#',
-      '#......##..........C...#',
-      '#..==..##..####..C..#..#',
-      '#..==.......EE#.....#..#',
-      '#..==..##..####..C.....#',
-      '#......##..........##.##',
-      '#..:.......C....C......#',
-      '#..##..##......##..C...#',
-      '#......##..:.......#...#',
-      '#....C.....##..........#',
-      '########################',
-    ],
-    guards: [
-      { path: [[6, 3], [6, 1]], speed: 1.1, pause: 0.8 },
-      { path: [[13, 5], [18, 5]], speed: 1.15, pause: 0.7 },
-      { path: [[12, 10], [15, 10]], speed: 1.0, pause: 1.0 },
-      { path: [[21, 10], [21, 12]], speed: 1.2, pause: 0.6 },
-    ],
-  },
-];
+import { tileCenter } from './geometry.js';
 
-// Scan a level's grid for the courier's entry tile and the exit tiles.
-// Returns pixel-free tile coordinates; callers convert with TILE.
-export function scanLevel(level) {
+const READING_ROOM = {
+  name: 'Floor 1 — Reading Room',
+  sub: 'Slip past the wardens. Reach the green door unseen.',
+  rows: [
+    '########################',
+    '#P....#.......#....s...#',
+    '#.....#..c....#....s...#',
+    '#..s..#.......#....#...#',
+    '#.....#.......#....#.E.#',
+    '#..c.......c.......#...#',
+    '#.....#.......#....#...#',
+    '#..s..#..c....#....s...#',
+    '#.....#.......#....#...#',
+    '#..c.......c.......#...#',
+    '#.....#.......#....#.s.#',
+    '#..s..#..c....#....#...#',
+    '#......................#',
+    '########################',
+  ],
+  // Right-hand stacks, the bottom corridor, the left stacks, the top
+  // reading desks: four patrols whose pauses never quite line up.
+  patrols: [
+    [[17, 1], [17, 6], [17, 12]],
+    [[1, 12], [11, 12], [22, 12]],
+    [[5, 1], [5, 6], [5, 12]],
+    [[8, 1], [13, 1], [13, 6], [8, 6]],
+  ],
+};
+
+const THE_VAULT = {
+  name: 'Floor 2 — The Vault',
+  sub: 'The strongroom door is watched twice over. Be patient.',
+  rows: [
+    '########################',
+    '#P...#....c.....#...s..#',
+    '#....#....c.....#......#',
+    '#.s..#....c.....#..c...#',
+    '#....#..........#......#',
+    '#.c..#..c....c..#..s...#',
+    '#....#..........#......#',
+    '#.s..#....c.....#..c...#',
+    '#....#....c.....#......#',
+    '#....#....c.....#..s...#',
+    '#.c.......c.....#......#',
+    '#....#....c.....#...E..#',
+    '#......................#',
+    '########################',
+  ],
+  // The strongroom aisle, the cross-vault patrol, the west wall.
+  patrols: [
+    [[21, 1], [21, 6], [21, 12]],
+    [[8, 4], [15, 4], [15, 6], [8, 6]],
+    [[4, 1], [4, 6], [4, 11]],
+  ],
+};
+
+export const FLOORS = [READING_ROOM, THE_VAULT];
+export const FLOOR_COUNT = FLOORS.length;
+
+export function buildFloor(index) {
+  const def = FLOORS[index];
+  if (!def) throw new Error('no floor ' + index);
+  const width = def.rows[0].length;
+  const grid = [];
   let start = null;
-  const exits = [];
-  level.grid.forEach((row, y) => {
-    [...row].forEach((ch, x) => {
-      if (ch === 'P') start = { x, y };
-      if (ch === 'E') exits.push({ x, y });
-    });
-  });
-  return { start, exits };
+  let exit = null;
+  for (let row = 0; row < def.rows.length; row++) {
+    const line = def.rows[row];
+    if (line.length !== width) {
+      throw new Error(def.name + ' row ' + row + ' is ' + line.length + ' wide, not ' + width);
+    }
+    const cells = [];
+    for (let col = 0; col < width; col++) {
+      const ch = line[col];
+      if (ch === 'P') {
+        if (start) throw new Error(def.name + ' has two starts');
+        start = tileCenter(col, row);
+        cells.push('.');
+      } else if (ch === 'E') {
+        if (exit) throw new Error(def.name + ' has two exits');
+        exit = tileCenter(col, row);
+        cells.push('E');
+      } else if ('#.cs.'.includes(ch)) {
+        cells.push(ch);
+      } else {
+        throw new Error(def.name + ' row ' + row + ' holds unknown tile ' + JSON.stringify(ch));
+      }
+    }
+    grid.push(cells);
+  }
+  if (!start) throw new Error(def.name + ' has no start');
+  if (!exit) throw new Error(def.name + ' has no exit');
+  const patrols = def.patrols.map((route) =>
+    route.map(([col, row]) => tileCenter(col, row)),
+  );
+  return { name: def.name, sub: def.sub, grid, start, exit, patrols };
 }

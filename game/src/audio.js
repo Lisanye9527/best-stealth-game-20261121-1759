@@ -1,85 +1,147 @@
-// Quiet Vault — a tiny synthesized sound kit: no audio files, just a
-// WebAudio oscillator and a filtered noise buffer. Footsteps are the point:
-// the courier's soft steps, and the wardens' heavier ones growing louder as
-// they near — sound that tells you where a guard is before you see him.
+// Quiet Vault — a synthesized sound kit.
+//
+// No audio files: every sound is built live with WebAudio, so the
+// game still has no network requests and nothing to download. A
+// warden's boots are a short burst of filtered noise whose loudness
+// follows his distance, so your ears can steer you before your eyes
+// can. The alarm is a slow two-tone hum that climbs with the meter.
+// Everything is a no-op until resume() is called from a real user
+// gesture, which is also what browsers require.
 
 export class SoundKit {
   constructor() {
-    this.context = null;
+    this.ctx = null;
     this.master = null;
-    this.noiseBuffer = null;
+    this.alarmNodes = null;
+    this.lastStepAt = 0;
   }
 
-  // Browsers only allow audio after a gesture; call from any key or click.
-  ensure() {
-    if (this.context) {
-      if (this.context.state === 'suspended') this.context.resume();
+  get ready() {
+    return this.ctx !== null;
+  }
+
+  resume() {
+    if (typeof window === 'undefined') return;
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.5;
+      this.master.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
+  // A single footstep: a 70 ms puff of low-passed noise. distance is
+  // in pixels; beyond about 420 the boots are inaudible. sneaking
+  // steps are half as loud again.
+  footstep(distance, sneaking) {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastStepAt < 0.05) return;
+    this.lastStepAt = now;
+    const loud = Math.max(0, 1 - distance / 420) * (sneaking ? 0.35 : 0.8);
+    if (loud <= 0.02) return;
+    const dur = 0.07;
+    const buffer = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 320;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.5 * loud, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.master);
+    src.start(now);
+  }
+
+  // The alarm hum: two detuned triangle waves, started once and
+  // retuned as the meter moves. level 0 silences it.
+  alarmHum(level) {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    if (level <= 0.02) {
+      this.stopAlarm();
       return;
     }
-    const AudioCtor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtor) return;
-    this.context = new AudioCtor();
-    this.master = this.context.createGain();
-    this.master.gain.value = 0.5;
-    this.master.connect(this.context.destination);
-    const length = this.context.sampleRate * 0.5;
-    this.noiseBuffer = this.context.createBuffer(1, length, this.context.sampleRate);
-    const data = this.noiseBuffer.getChannelData(0);
-    for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+    if (!this.alarmNodes) {
+      const o1 = this.ctx.createOscillator();
+      const o2 = this.ctx.createOscillator();
+      o1.type = 'triangle';
+      o2.type = 'triangle';
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      o1.connect(gain);
+      o2.connect(gain);
+      gain.connect(this.master);
+      o1.start();
+      o2.start();
+      this.alarmNodes = { o1, o2, gain };
+    }
+    const now = this.ctx.currentTime;
+    const base = 196 + level * 120;
+    this.alarmNodes.o1.frequency.setTargetAtTime(base, now, 0.1);
+    this.alarmNodes.o2.frequency.setTargetAtTime(base * 1.059, now, 0.1);
+    this.alarmNodes.gain.gain.setTargetAtTime(0.05 + level * 0.09, now, 0.15);
   }
 
-  // One soft noise tap, low-passed: pitch and volume set the weight of the step.
-  step(volume, cutoff) {
-    if (!this.context) return;
-    const t = this.context.currentTime;
-    const source = this.context.createBufferSource();
-    source.buffer = this.noiseBuffer;
-    const filter = this.context.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = cutoff;
-    const gain = this.context.createGain();
-    gain.gain.setValueAtTime(volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-    source.connect(filter).connect(gain).connect(this.master);
-    source.start(t, Math.random() * 0.3, 0.1);
+  stopAlarm() {
+    if (!this.alarmNodes) return;
+    const nodes = this.alarmNodes;
+    this.alarmNodes = null;
+    const now = this.ctx.currentTime;
+    nodes.gain.gain.setTargetAtTime(0, now, 0.05);
+    window.setTimeout(() => {
+      try {
+        nodes.o1.stop();
+        nodes.o2.stop();
+      } catch (err) {
+        // Already stopped; nothing to clean up.
+      }
+    }, 300);
   }
 
-  courierStep(sneaking) {
-    this.step(sneaking ? 0.05 : 0.11, sneaking ? 500 : 800);
-  }
-
-  wardenStep(nearness) {
-    // nearness 0..1 from the main loop: a far warden is a faint tap, a near
-    // one is a boot on stone you can steer by.
-    this.step(0.03 + nearness * 0.16, 300 + nearness * 200);
-  }
-
-  tone(freqFrom, freqTo, duration, volume, type = 'sine') {
-    if (!this.context) return;
-    const t = this.context.currentTime;
-    const osc = this.context.createOscillator();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freqFrom, t);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(30, freqTo), t + duration);
-    const gain = this.context.createGain();
-    gain.gain.setValueAtTime(volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-    osc.connect(gain).connect(this.master);
-    osc.start(t);
-    osc.stop(t + duration);
-  }
-
-  alarm() {
-    this.tone(620, 180, 0.5, 0.22, 'sawtooth');
-    this.tone(466, 140, 0.6, 0.14, 'square');
-  }
-
+  // A soft two-note chime for reaching the exit.
   chime() {
-    this.tone(660, 660, 0.14, 0.12);
-    setTimeout(() => this.tone(880, 880, 0.22, 0.12), 110);
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    [523.25, 783.99].forEach((freq, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const gain = this.ctx.createGain();
+      const start = now + i * 0.12;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.22, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5);
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(start);
+      osc.stop(start + 0.55);
+    });
   }
 
-  click() {
-    this.tone(340, 240, 0.06, 0.08, 'triangle');
+  // A low thud for being caught.
+  thud() {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.exponentialRampToValueAtTime(38, now + 0.3);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.5, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.connect(gain);
+    gain.connect(this.master);
+    osc.start(now);
+    osc.stop(now + 0.4);
   }
 }

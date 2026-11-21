@@ -1,64 +1,56 @@
-// Quiet Vault — the alarm: how fast the wardens' suspicion fills and fades.
+// Quiet Vault — the alarm meter.
 //
-// Being seen fills the meter; the closer the warden and the brighter the
-// floor, the faster it fills. Shadowed floor and sneaking both slow it, so a
-// player caught at the cone's edge has a real chance to break away and let
-// the meter drain — that recovery chance is the heart of the game.
+// Suspicion is a single number from 0 to 1. It fills while any lamp
+// holds the courier and drains when no lamp does, so a near miss is a
+// scare, not a sentence: break the line of sight and the meter fades.
+// Sneaking and shadow slow the fill. At 1 the run is over; the meter
+// never falls below 0 and never rises above 1.
 
-import {
-  TILE, DETECTION_FILL, DETECTION_DRAIN, SHADOW_FACTOR, SNEAK_FACTOR,
-} from './config.js';
-import { floorCharAt } from './geometry.js';
+import { ALARM_HOT, ALARM_WARN, DECAY_RATE, FILL_RATE, SHADOW_FACTOR, SNEAK_FACTOR } from './config.js';
 
-// game: { detection, guards, player, grid, spotted (bool, latches per run) }
-// Returns { seenNow, closestGuard } for the renderer and the sound kit.
-export function updateDetection(game, dt, time) {
-  const { guards, player, grid } = game;
-  let seenNow = false;
-  let closestGuard = null;
-  let bestCloseness = -1;
+export class Alarm {
+  constructor() {
+    this.value = 0;
+    this.peak = 0;
+  }
 
-  for (const guard of guards) {
-    const closeness = guard.seesPoint(player.x, player.y, time);
-    if (closeness >= 0) {
-      seenNow = true;
-      if (closeness > bestCloseness) {
-        bestCloseness = closeness;
-        closestGuard = guard;
-      }
+  reset() {
+    this.value = 0;
+    this.peak = 0;
+  }
+
+  // exposure: the strongest lamp on the courier this frame, 0..1.
+  // sneak / shadow: whether the courier is sneaking / in shadow.
+  update(dt, exposure, sneak, shadow) {
+    if (exposure > 0) {
+      let rate = exposure * FILL_RATE;
+      if (sneak) rate *= SNEAK_FACTOR;
+      if (shadow) rate *= SHADOW_FACTOR;
+      this.value = Math.min(1, this.value + rate * dt);
+    } else {
+      this.value = Math.max(0, this.value - DECAY_RATE * dt);
     }
-    // Each warden's own lamp colour follows whether he personally sees her.
-    const target = closeness >= 0 ? 1 : 0;
-    guard.alert += (target - guard.alert) * Math.min(1, dt * 7);
+    if (this.value > this.peak) this.peak = this.value;
   }
 
-  if (seenNow) {
-    let fill = DETECTION_FILL * (0.35 + 0.65 * bestCloseness);
-    if (floorCharAt(grid, player.x, player.y) === ':') fill *= SHADOW_FACTOR;
-    if (player.sneaking) fill *= SNEAK_FACTOR;
-    game.detection = Math.min(1, game.detection + fill * dt);
-    game.everSpotted = true;
-  } else {
-    game.detection = Math.max(0, game.detection - DETECTION_DRAIN * dt);
+  get caught() {
+    return this.value >= 1;
   }
 
-  return { seenNow, closestGuard };
-}
-
-// Standing on the warden's boots is being caught, seen or not.
-export function touchesGuard(game) {
-  const { guards, player } = game;
-  for (const guard of guards) {
-    const d = Math.hypot(guard.x - player.x, guard.y - player.y);
-    if (d < guard.radius + player.radius - 4) return guard;
+  get warm() {
+    return this.value >= ALARM_WARN;
   }
-  return null;
-}
 
-// Is the courier standing on an exit tile?
-export function onExit(game) {
-  const { player, exits } = game;
-  return exits.some(
-    (e) => Math.floor(player.x / TILE) === e.x && Math.floor(player.y / TILE) === e.y,
-  );
+  get hot() {
+    return this.value >= ALARM_HOT;
+  }
+
+  // One word for the HUD: what the courier should feel right now.
+  label() {
+    if (this.caught) return 'CAUGHT';
+    if (this.value >= ALARM_HOT) return 'SEEN — RUN';
+    if (this.value >= ALARM_WARN) return 'SPOTTED';
+    if (this.value > 0.02) return 'SUSPICION RISING';
+    return 'UNSEEN';
+  }
 }

@@ -1,56 +1,63 @@
-// Quiet Vault — the courier: smooth keyboard movement with tile collision,
-// a facing that follows the last move, and a footstep stride counter the
-// sound kit listens to.
+// Quiet Vault — the courier.
+//
+// The player is a circle with a heading. Movement is the four keys as
+// a unit vector, scaled by the sneak state; the circle slides along
+// walls instead of sticking to them. Footsteps are counted in distance
+// travelled, not in time, so standing still is always silent and the
+// sound kit can spend one tick per stride.
 
-import {
-  TILE, PLAYER_SPEED, PLAYER_SNEAK_SPEED, PLAYER_RADIUS,
-} from './config.js';
-import { discBlocked } from './geometry.js';
+import { PLAYER_RADIUS, SNEAK_SPEED, STEP_LENGTH, WALK_SPEED } from './config.js';
+import { moveWithWalls, shadowAt } from './geometry.js';
 
-export class Player {
-  constructor(startTile) {
-    this.startX = (startTile.x + 0.5) * TILE;
-    this.startY = (startTile.y + 0.5) * TILE;
-    this.reset();
-  }
-
-  reset() {
-    this.x = this.startX;
-    this.y = this.startY;
-    this.facing = 0; // east
-    this.moving = false;
+export class Courier {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.heading = 0;
     this.sneaking = false;
-    this.stride = 0; // px walked since the last footstep sound
+    this.moving = false;
+    this.stepAcc = 0;
+    this.stepped = false;
   }
 
-  // input: {x: -1..1, y: -1..1, sneak: boolean} from the keyboard each frame.
-  update(dt, input, grid) {
-    this.sneaking = Boolean(input.sneak);
-    const speed = this.sneaking ? PLAYER_SNEAK_SPEED : PLAYER_SPEED;
-    let vx = input.x;
-    let vy = input.y;
-    const len = Math.hypot(vx, vy);
-    this.moving = len > 0;
-    this.stride = 0;
+  reset(x, y) {
+    this.x = x;
+    this.y = y;
+    this.heading = 0;
+    this.sneaking = false;
+    this.moving = false;
+    this.stepAcc = 0;
+    this.stepped = false;
+  }
+
+  // input: { x, y } each in -1..1, already combined from the keys.
+  // sneak: whether Shift is held. Returns nothing; the step flag is
+  // read by the frame loop to play one footstep per stride.
+  update(dt, grid, input, sneak) {
+    this.stepped = false;
+    this.sneaking = sneak;
+    const len = Math.hypot(input.x, input.y);
+    this.moving = len > 0.01;
     if (!this.moving) return;
-    vx /= len;
-    vy /= len;
-    this.facing = Math.atan2(vy, vx);
-    // Move one axis at a time so the courier slides along walls and crates
-    // instead of sticking to them.
-    const stepX = vx * speed * dt;
-    const stepY = vy * speed * dt;
-    if (!discBlocked(grid, this.x + stepX, this.y, PLAYER_RADIUS)) {
-      this.x += stepX;
-      this.stride += Math.abs(stepX);
-    }
-    if (!discBlocked(grid, this.x, this.y + stepY, PLAYER_RADIUS)) {
-      this.y += stepY;
-      this.stride += Math.abs(stepY);
+    const nx = input.x / len;
+    const ny = input.y / len;
+    const speed = sneak ? SNEAK_SPEED : WALK_SPEED;
+    const moved = moveWithWalls(grid, this.x, this.y, nx * speed * dt, ny * speed * dt, PLAYER_RADIUS);
+    const travelled = Math.hypot(moved.x - this.x, moved.y - this.y);
+    this.x = moved.x;
+    this.y = moved.y;
+    if (travelled > 0.01) {
+      this.heading = Math.atan2(moved.y - this.y, moved.x - this.x);
+      this.stepAcc += travelled;
+      if (this.stepAcc >= STEP_LENGTH) {
+        this.stepAcc -= STEP_LENGTH;
+        this.stepped = true;
+      }
     }
   }
 
-  get radius() {
-    return PLAYER_RADIUS;
+  // Is the courier standing in hatched shadow this frame?
+  inShadow(grid) {
+    return shadowAt(grid, this.x, this.y);
   }
 }

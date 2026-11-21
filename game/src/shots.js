@@ -1,71 +1,67 @@
-// Quiet Vault — screenshot staging. The entry's screenshots are real renders
-// of this code in a browser; opening the game with ?shot=<name> freezes a
-// composed, deterministic scene (patrols held, alarm set) so the cover frame
-// shows the game at its most complete instead of whatever a timer caught.
+// Quiet Vault — deterministic screenshot scenes.
 //
-//   ?shot=title   the title screen over a lamplit floor
-//   ?shot=cover   floor one, mid-run: the courier lit at a lamp's edge
-//   ?shot=level2  floor two, mid-run outside the strongroom door
-//   ?shot=alarm   the moment before capture: alarm nearly full, lamp red
+// The game reads ?shot=<name> from the page address and stages one
+// frozen moment: the frame loop keeps drawing but never updates, so
+// the picture is the same every time it is taken. Each scene is a
+// real position inside a real floor — a warden mid-patrol, the lamp
+// on the courier, the alarm nearly full — never a drawing made for
+// the camera. The cover is the game at its best: a cone sweeping
+// across the reading room while the courier waits in the dark.
 
-import { TILE } from './config.js';
+import { tileCenter } from './geometry.js';
 
-export function readShotName() {
-  return new URLSearchParams(window.location.search).get('shot');
+export const SHOT_NAMES = ['cover', 'level2', 'alarm', 'title'];
+
+function place(game, who, col, row) {
+  const p = tileCenter(col, row);
+  who.x = p.x;
+  who.y = p.y;
 }
 
-function placePlayer(game, tileX, tileY, facing) {
-  game.player.x = (tileX + 0.5) * TILE;
-  game.player.y = (tileY + 0.5) * TILE;
-  game.player.facing = facing;
-}
-
-function placeGuard(guard, tileX, tileY, facing, alert) {
-  guard.x = (tileX + 0.5) * TILE;
-  guard.y = (tileY + 0.5) * TILE;
-  guard.facing = facing;
-  guard.state = 'patrol';
-  guard.alert = alert;
-}
-
-export function stageShot(game, name) {
-  game.staged = true;
-  if (name === 'title') {
-    game.loadLevel(0);
-    game.state = 'title';
-    placePlayer(game, 9, 7, 0.4);
-    placeGuard(game.guards[0], 13, 2, Math.PI / 2, 0);
-    placeGuard(game.guards[1], 20, 6, Math.PI, 0);
-    placeGuard(game.guards[2], 7, 12, 0, 0);
-    game.elapsed = 0;
-  } else if (name === 'cover') {
-    game.loadLevel(0);
-    game.state = 'playing';
-    placePlayer(game, 13, 7, -Math.PI / 2);
-    placeGuard(game.guards[0], 13, 3, Math.PI / 2, 0.85);
-    placeGuard(game.guards[1], 20, 5, Math.PI, 0);
-    placeGuard(game.guards[2], 6, 12, 0, 0);
-    game.detection = 0.45;
-    game.elapsed = 64;
+export function applyShot(game, name) {
+  if (name === 'cover') {
+    game.loadFloor(0);
+    place(game, game.courier, 10, 8);
+    game.courier.heading = -Math.PI / 2;
+    place(game, game.wardens[0], 17, 4);
+    game.wardens[0].heading = 2.62;
+    game.wardens[0].mode = 'pause';
+    place(game, game.wardens[1], 8, 12);
+    game.wardens[1].heading = -Math.PI / 2;
+    game.wardens[1].mode = 'walk';
+    place(game, game.wardens[2], 5, 3);
+    game.wardens[2].heading = Math.PI / 2;
+    game.alarm.value = 0.12;
+    game.mode = 'play';
   } else if (name === 'level2') {
-    game.loadLevel(1);
-    game.state = 'playing';
-    placePlayer(game, 10, 7, 0);
-    placeGuard(game.guards[0], 6, 2, Math.PI / 2, 0);
-    placeGuard(game.guards[1], 16, 5, Math.PI, 0);
-    placeGuard(game.guards[2], 13, 10, -Math.PI / 2, 0.35);
-    placeGuard(game.guards[3], 21, 11, Math.PI, 0);
-    game.detection = 0.3;
-    game.elapsed = 131;
+    game.loadFloor(1);
+    place(game, game.courier, 2, 6);
+    game.courier.heading = 0;
+    game.courier.sneaking = true;
+    place(game, game.wardens[0], 21, 6);
+    game.wardens[0].heading = Math.PI;
+    place(game, game.wardens[1], 12, 4);
+    game.wardens[1].heading = Math.PI / 2;
+    place(game, game.wardens[2], 4, 8);
+    game.wardens[2].heading = -Math.PI / 2;
+    game.alarm.value = 0.05;
+    game.mode = 'play';
   } else if (name === 'alarm') {
-    game.loadLevel(0);
-    game.state = 'playing';
-    placePlayer(game, 14, 4, Math.PI);
-    placeGuard(game.guards[0], 13, 3, Math.PI / 4, 1);
-    placeGuard(game.guards[1], 20, 8, -Math.PI / 2, 0);
-    placeGuard(game.guards[2], 8, 12, 0, 0);
-    game.detection = 0.93;
-    game.everSpotted = true;
-    game.elapsed = 38;
+    game.loadFloor(0);
+    place(game, game.courier, 15, 4);
+    game.courier.heading = Math.PI;
+    place(game, game.wardens[0], 17, 4);
+    game.wardens[0].heading = Math.PI;
+    game.wardens[0].exposure = 0.9;
+    place(game, game.wardens[1], 11, 12);
+    game.wardens[1].heading = -Math.PI / 2;
+    game.alarm.value = 0.86;
+    game.mode = 'play';
+  } else if (name === 'title') {
+    game.loadFloor(0);
+    game.mode = 'title';
+  } else {
+    game.loadFloor(0);
+    game.mode = 'title';
   }
 }

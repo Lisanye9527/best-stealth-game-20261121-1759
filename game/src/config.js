@@ -1,58 +1,79 @@
-// Quiet Vault — shared constants: sizes, speeds, vision and the colour palette.
-// Everything visual or tunable lives here so the other modules stay about logic.
+// Quiet Vault — tuning table.
+//
+// Every number the game runs on lives here, in one place, so a balance
+// change never means hunting through the actors. Distances are pixels,
+// speeds are pixels per second, angles are radians. The playfield is a
+// 24 by 14 tile grid drawn at 48 pixels a tile, centred on a 1280x800
+// canvas with a slim strip top and bottom for the HUD and the hints.
 
-export const TILE = 40;
+export const TILE = 48;
 export const COLS = 24;
-export const ROWS = 15;
-export const FIELD_W = COLS * TILE; // 960
-export const FIELD_H = ROWS * TILE; // 600
-export const HUD_H = 60;
-export const VIEW_W = FIELD_W;
-export const VIEW_H = FIELD_H + HUD_H; // 660
+export const ROWS = 14;
 
-export const PLAYER_SPEED = 152; // px per second, normal walk
-export const PLAYER_SNEAK_SPEED = 84; // px per second while Shift is held
+export const VIEW_W = 1280;
+export const VIEW_H = 800;
+export const ORIGIN_X = 64;
+export const ORIGIN_Y = 72;
+
+export const WALK_SPEED = 178;
+export const SNEAK_SPEED = 96;
+export const GUARD_SPEED = 74;
+
+// How long a warden waits at a waypoint, then sweeps his lamp, before
+// walking on. The pause is the window a patient player walks through.
+export const GUARD_PAUSE = 1.1;
+export const GUARD_SCAN = 0.9;
+
+// The lamp cone: how far it reaches, how wide it opens, and how many
+// rays the renderer casts to bend it around walls and crates.
+export const CONE_RANGE = 235;
+export const CONE_HALF = 0.56;
+export const CONE_RAYS = 19;
+
+// Inside this distance a warden sees the courier outright, cone or not:
+// you cannot brush past a guard in the dark.
+export const SPOT_NEAR = 46;
+
+// The alarm fills this fast per second at point blank, out in the open,
+// walking upright. Sneaking and shadow each slow it down.
+export const FILL_RATE = 0.85;
+export const DECAY_RATE = 0.28;
+export const SNEAK_FACTOR = 0.45;
+export const SHADOW_FACTOR = 0.35;
+
 export const PLAYER_RADIUS = 13;
+export const GUARD_RADIUS = 15;
+export const STEP_LENGTH = 34;
 
-export const GUARD_RADIUS = 14;
-export const GUARD_TURN_RATE = 3.4; // radians per second a guard can swing round
-export const VISION_RANGE = 182; // px a flashlight beam reaches
-export const VISION_HALF_ANGLE = 0.58; // radians, half the cone's spread
-
-export const DETECTION_FILL = 0.8; // alarm gained per second at point blank
-export const DETECTION_DRAIN = 0.4; // alarm lost per second while unseen
-export const SHADOW_FACTOR = 0.45; // detection multiplier standing in shadow
-export const SNEAK_FACTOR = 0.6; // detection multiplier while sneaking
-
-export const COLORS = {
-  pageBg: '#07090f',
-  hudBg: '#0d1120',
-  hudLine: '#232c47',
-  hudText: '#c9d4f2',
-  hudDim: '#6d7ba3',
-  floorA: '#1b2138',
-  floorB: '#1e2540',
-  floorLine: 'rgba(120, 140, 200, 0.05)',
-  shadowFloor: '#11152a',
-  moonPool: 'rgba(140, 170, 255, 0.055)',
-  wall: '#39406b',
-  wallTop: '#4d578a',
-  wallEdge: '#232946',
-  crate: '#8a6a42',
-  crateDark: '#6e5433',
-  crateLine: '#543f24',
-  shelf: '#4a3a5e',
-  shelfDark: '#382b47',
-  exitGlow: '#39e6a3',
-  exitDoor: '#14532d',
-  player: '#2dd4bf',
-  playerDark: '#0f766e',
-  guard: '#e05252',
-  guardDark: '#7f1d1d',
-  guardCap: '#991b1b',
-  coneCalm: '255, 205, 92',
-  coneAlarmed: '255, 84, 60',
-  alarm: '#ff5147',
-  gold: '#f5c451',
-  parchment: '#e8e3d3',
+export const PALETTE = {
+  page: '#0b0e14',
+  floorA: '#20242e',
+  floorB: '#1b1f28',
+  floorEdge: '#2c3242',
+  wall: '#0e1118',
+  wallTop: '#3a4152',
+  crate: '#6b5433',
+  crateEdge: '#8a6f45',
+  shadow: '#141a26',
+  shadowHatch: '#232c3d',
+  exit: '#3ddc84',
+  exitDark: '#1d7a4a',
+  cone: 'rgba(255, 196, 66, 0.30)',
+  coneEdge: 'rgba(255, 196, 66, 0.55)',
+  coneHot: 'rgba(255, 120, 60, 0.38)',
+  guard: '#c8ccd4',
+  guardCoat: '#5a3d2b',
+  lamp: '#ffd166',
+  courier: '#7dd3fc',
+  courierCloak: '#155e75',
+  hud: '#e8e6df',
+  hudDim: '#9aa3b2',
+  alarmLow: '#3ddc84',
+  alarmMid: '#ffd166',
+  alarmHigh: '#ff5d5d',
+  banner: 'rgba(8, 10, 16, 0.82)',
 };
+
+// The alarm thresholds the HUD and the warden barks react to.
+export const ALARM_WARN = 0.35;
+export const ALARM_HOT = 0.7;

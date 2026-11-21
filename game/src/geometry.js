@@ -1,89 +1,134 @@
-// Quiet Vault — grid and line-of-sight helpers.
-// The level is a grid of characters; this module answers the three questions
-// every other module asks: what tile is here, does this disc touch a wall,
-// and can a guard at A actually see point B?
+// Quiet Vault — grid queries, rays and line of sight.
+//
+// The floor is a grid of characters. '#' is a wall, 'c' is a crate:
+// both stop the courier and the wardens, and both block a lamp. 's' is
+// hatched shadow floor, '.' is open floor. Everything here works in
+// pixel space; the grid is only ever consulted tile by tile, so a
+// half-open question — "is this point inside a wall?" — has exactly
+// one answer.
 
-import { TILE } from './config.js';
+import { COLS, ORIGIN_X, ORIGIN_Y, ROWS, TILE } from './config.js';
 
-// Tiles that block both walking and sight: stone wall, crate, bookcase.
-export function isBlockingChar(ch) {
-  return ch === '#' || ch === 'C' || ch === '=';
+// Which tile a pixel sits in. Points outside the board report the
+// nearest edge tile, so callers never index out of range.
+export function tileOf(px, py) {
+  const col = Math.floor((px - ORIGIN_X) / TILE);
+  const row = Math.floor((py - ORIGIN_Y) / TILE);
+  return {
+    col: Math.max(0, Math.min(COLS - 1, col)),
+    row: Math.max(0, Math.min(ROWS - 1, row)),
+  };
 }
 
-export function tileCharAt(grid, tileX, tileY) {
-  if (tileY < 0 || tileY >= grid.length) return '#';
-  const row = grid[tileY];
-  if (tileX < 0 || tileX >= row.length) return '#';
-  return row[tileX];
+export function tileChar(grid, col, row) {
+  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return '#';
+  return grid[row][col];
 }
 
-// Is the pixel point (x, y) inside a blocking tile?
-export function pointBlocked(grid, x, y) {
-  return isBlockingChar(tileCharAt(grid, Math.floor(x / TILE), Math.floor(y / TILE)));
+export function tileCenter(col, row) {
+  return { x: ORIGIN_X + col * TILE + TILE / 2, y: ORIGIN_Y + row * TILE + TILE / 2 };
 }
 
-// Does a disc of radius r around (x, y) overlap any blocking tile?
-// Checks the disc's bounding box corners and edge midpoints — enough for the
-// chunky tile sizes this game uses.
-export function discBlocked(grid, x, y, r) {
-  const probes = [
-    [x - r, y - r], [x + r, y - r], [x - r, y + r], [x + r, y + r],
-    [x, y - r], [x, y + r], [x - r, y], [x + r, y],
-  ];
-  for (const [px, py] of probes) {
-    if (pointBlocked(grid, px, py)) return true;
-  }
-  return false;
+// True when the tile under a pixel stops a body: walls and crates.
+export function solidAt(grid, px, py) {
+  const { col, row } = tileOf(px, py);
+  const ch = tileChar(grid, col, row);
+  return ch === '#' || ch === 'c';
 }
 
-// The tile character under a pixel point, for floor effects like shadow.
-export function floorCharAt(grid, x, y) {
-  return tileCharAt(grid, Math.floor(x / TILE), Math.floor(y / TILE));
+// True when the tile under a pixel stops a lamp: same set as bodies.
+export function blocksSight(grid, px, py) {
+  return solidAt(grid, px, py);
 }
 
-// March a ray from (x, y) along angle until it hits a blocking tile or runs
-// out of range; returns the distance travelled. Steps are small (3 px) so a
-// ray cannot tunnel through a one-tile wall.
-export function castRay(grid, x, y, angle, maxDist) {
-  const step = 3;
-  const dx = Math.cos(angle) * step;
-  const dy = Math.sin(angle) * step;
-  let travelled = 0;
-  let cx = x;
-  let cy = y;
-  while (travelled < maxDist) {
-    cx += dx;
-    cy += dy;
-    travelled += step;
-    if (pointBlocked(grid, cx, cy)) return travelled;
-  }
-  return maxDist;
+// True when the tile under a pixel is hatched shadow floor.
+export function shadowAt(grid, px, py) {
+  const { col, row } = tileOf(px, py);
+  return tileChar(grid, col, row) === 's';
 }
 
-// Straight-line sight between two points: sample the segment finely and fail
-// if any sample lands inside a blocking tile. The endpoints themselves are
-// exempt so an actor standing against a crate is not blinded by it.
-export function hasLineOfSight(grid, x1, y1, x2, y2) {
-  const dist = Math.hypot(x2 - x1, y2 - y1);
-  const steps = Math.max(1, Math.floor(dist / 6));
+// Is the straight segment between two points free of anything that
+// blocks a lamp? Sampled every few pixels; the endpoints themselves
+// are the lamp and the courier, so they are not tested.
+export function losClear(grid, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return true;
+  const steps = Math.ceil(dist / 5);
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
-    if (pointBlocked(grid, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)) return false;
+    if (blocksSight(grid, ax + dx * t, ay + dy * t)) return false;
   }
   return true;
 }
 
-// Smallest signed difference between two headings, in (-PI, PI].
-export function angleDifference(from, to) {
-  let d = (to - from) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
+// March a ray out from an origin until it hits something that blocks
+// a lamp or runs out of range. Returns the stopping point and how far
+// it travelled, so a cone edge can end exactly on a wall.
+export function castRay(grid, ox, oy, angle, maxDist) {
+  const step = 4;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  let travelled = 0;
+  while (travelled < maxDist) {
+    const nx = ox + cos * (travelled + step);
+    const ny = oy + sin * (travelled + step);
+    if (blocksSight(grid, nx, ny)) break;
+    travelled += step;
+  }
+  const d = Math.min(travelled, maxDist);
+  return { x: ox + cos * d, y: oy + sin * d, dist: d };
 }
 
-// Turn heading `from` toward `to` by at most maxStep radians.
-export function turnToward(from, to, maxStep) {
-  const d = angleDifference(from, to);
-  if (Math.abs(d) <= maxStep) return to;
-  return from + Math.sign(d) * maxStep;
+// The polygon a lamp paints on the floor: the origin plus one ray
+// endpoint per slice across the cone. A wall close by shortens its
+// rays, so the cone bends around corners instead of shining through.
+export function conePolygon(grid, ox, oy, angle, range, half, rays) {
+  const points = [{ x: ox, y: oy }];
+  for (let i = 0; i <= rays; i++) {
+    const a = angle - half + (2 * half * i) / rays;
+    const hit = castRay(grid, ox, oy, a, range);
+    points.push({ x: hit.x, y: hit.y });
+  }
+  return points;
+}
+
+// Would a circle of radius r centred here overlap a solid tile? The
+// centre and eight rim points are tested, which is enough for a body
+// much smaller than a tile.
+export function circleHitsSolid(grid, x, y, r) {
+  if (solidAt(grid, x, y)) return true;
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    if (solidAt(grid, x + Math.cos(a) * r, y + Math.sin(a) * r)) return true;
+  }
+  return false;
+}
+
+// Move a circle by (dx, dy), sliding along walls: try the x step, then
+// the y step, keeping whichever half does not collide. Returns the new
+// position and whether each axis was blocked.
+export function moveWithWalls(grid, x, y, dx, dy, r) {
+  let blockedX = false;
+  let blockedY = false;
+  if (!circleHitsSolid(grid, x + dx, y, r)) {
+    x += dx;
+  } else {
+    blockedX = true;
+  }
+  if (!circleHitsSolid(grid, x, y + dy, r)) {
+    y += dy;
+  } else {
+    blockedY = true;
+  }
+  return { x, y, blockedX, blockedY };
+}
+
+// Shortest signed turn from one heading to another, in (-PI, PI].
+export function angleDelta(from, to) {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d <= -Math.PI) d += Math.PI * 2;
+  return d;
 }

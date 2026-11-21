@@ -1,181 +1,156 @@
-// Quiet Vault — boot, input, the state machine and the frame loop.
+// Quiet Vault — boot, input and the frame loop.
 //
-// States: title → playing → (caught → playing) / (clear → playing) → won.
-// The loop updates the world only in 'playing'; every state renders through
-// render.js, and menu buttons are laid out there and hit-tested here.
+// This is the only file the page loads. It builds one game object —
+// floor, wardens, courier, alarm, sound, mode — and owns the loop
+// that ticks it and the renderer that draws it. Modes: title, play,
+// caught, clear, win. A ?shot= scene freezes the loop after staging,
+// so a screenshot is one drawn frame of a real game state.
 
-import { LEVELS, scanLevel } from './levels.js';
-import { Guard } from './guards.js';
-import { Player } from './player.js';
-import { updateDetection, touchesGuard, onExit } from './detection.js';
+import { VIEW_H, VIEW_W } from './config.js';
+import { FLOOR_COUNT, buildFloor } from './levels.js';
+import { Warden } from './guards.js';
+import { Courier } from './player.js';
+import { Alarm } from './detection.js';
 import { SoundKit } from './audio.js';
-import { drawScene, layoutButtons } from './render.js';
-import { readShotName, stageShot } from './shots.js';
+import { drawScene } from './render.js';
+import { applyShot } from './shots.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const statusLine = document.getElementById('status');
-const sound = new SoundKit();
 
 const game = {
-  state: 'title',
-  levelIndex: 0,
-  level: null,
-  grid: null,
-  guards: [],
-  player: null,
-  exits: [],
-  detection: 0,
-  everSpotted: false,
-  elapsed: 0,
-  attempts: 0,
-  stateTime: 0,
-  staged: false,
-  seenNow: false,
-
-  loadLevel(index) {
-    this.levelIndex = index;
-    this.level = LEVELS[index];
-    this.grid = this.level.grid;
-    const { start, exits } = scanLevel(this.level);
-    this.exits = exits;
-    this.player = new Player(start);
-    this.guards = this.level.guards.map((def, i) => new Guard(def, this.grid, i));
-    this.detection = 0;
-    this.everSpotted = false;
-    this.seenNow = false;
+  floor: null,
+  floorIndex: 0,
+  wardens: [],
+  courier: null,
+  alarm: new Alarm(),
+  sound: new SoundKit(),
+  mode: 'title',
+  frozen: false,
+  time: 0,
+  loadFloor(index) {
+    this.floorIndex = index;
+    this.floor = buildFloor(index);
+    this.wardens = this.floor.patrols.map((route, k) => new Warden(route, k * 0.7));
+    if (this.courier) {
+      this.courier.reset(this.floor.start.x, this.floor.start.y);
+    } else {
+      this.courier = new Courier(this.floor.start.x, this.floor.start.y);
+    }
+    this.alarm.reset();
+    this.mode = 'play';
   },
 };
 
-function announce(text) {
-  if (statusLine) statusLine.textContent = text;
+game.loadFloor(0);
+game.mode = 'title';
+
+const keys = new Set();
+
+function readInput() {
+  let x = 0;
+  let y = 0;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
+  const sneak = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  return { x, y, sneak };
 }
 
-function setState(next) {
-  game.state = next;
-  game.stateTime = 0;
-  if (next === 'playing') announce(`${game.level.name}. Reach the exit unseen.`);
-  if (next === 'caught') announce('Spotted! The wardens caught you. Try the floor again.');
-  if (next === 'clear') announce('Floor cleared. One floor deeper.');
-  if (next === 'won') announce('The vault is empty. You were never there. You win.');
+function update(dt) {
+  game.time += dt;
+  const input = readInput();
+  game.courier.update(dt, game.floor.grid, input, input.sneak);
+  if (game.courier.stepped) {
+    game.sound.footstep(320, game.courier.sneaking);
+  }
+  let exposure = 0;
+  for (const warden of game.wardens) {
+    warden.update(dt, game.floor.grid);
+    if (warden.stepped) {
+      const d = Math.hypot(warden.x - game.courier.x, warden.y - game.courier.y);
+      game.sound.footstep(d, false);
+    }
+    const seen = warden.exposureTo(game.floor.grid, game.courier);
+    if (seen > exposure) exposure = seen;
+  }
+  const shadow = game.courier.inShadow(game.floor.grid);
+  game.alarm.update(dt, exposure, game.courier.sneaking, shadow);
+  game.sound.alarmHum(game.alarm.value);
+  if (game.alarm.caught) {
+    game.mode = 'caught';
+    game.sound.thud();
+    game.sound.stopAlarm();
+    return;
+  }
+  const exit = game.floor.exit;
+  if (Math.hypot(game.courier.x - exit.x, game.courier.y - exit.y) < 26) {
+    game.sound.chime();
+    game.sound.stopAlarm();
+    game.mode = game.floorIndex + 1 >= FLOOR_COUNT ? 'win' : 'clear';
+  }
 }
 
-function startRun() {
-  game.attempts = 0;
-  game.elapsed = 0;
-  game.loadLevel(0);
-  setState('playing');
+function pressStart() {
+  if (game.mode === 'title') {
+    game.mode = 'play';
+  } else if (game.mode === 'clear') {
+    game.loadFloor(game.floorIndex + 1);
+  } else if (game.mode === 'win') {
+    game.loadFloor(0);
+    game.mode = 'title';
+  }
 }
-
-function pressButton(id) {
-  sound.ensure();
-  sound.click();
-  if (id === 'start' || id === 'again') startRun();
-  else if (id === 'retry') { game.loadLevel(game.levelIndex); setState('playing'); }
-  else if (id === 'continue') { game.loadLevel(game.levelIndex + 1); setState('playing'); }
-}
-
-// ------------------------------------------------------------- input
-
-const keysDown = new Set();
 
 window.addEventListener('keydown', (event) => {
-  sound.ensure();
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) {
     event.preventDefault();
   }
-  if (event.repeat) return;
-  keysDown.add(event.code);
+  game.sound.resume();
   if (event.code === 'Enter' || event.code === 'Space') {
-    const [first] = layoutButtons(game);
-    if (first) pressButton(first.id);
+    pressStart();
+    return;
   }
   if (event.code === 'KeyR') {
-    if (game.state === 'playing' && !game.staged) { game.loadLevel(game.levelIndex); setState('playing'); }
-    else if (game.state === 'caught') pressButton('retry');
-  }
-});
-
-window.addEventListener('keyup', (event) => keysDown.delete(event.code));
-window.addEventListener('blur', () => keysDown.clear());
-
-canvas.addEventListener('click', (event) => {
-  sound.ensure();
-  const rect = canvas.getBoundingClientRect();
-  const x = (event.clientX - rect.left) * (canvas.width / rect.width);
-  const y = (event.clientY - rect.top) * (canvas.height / rect.height);
-  for (const b of layoutButtons(game)) {
-    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-      pressButton(b.id);
-      return;
+    if (game.mode === 'caught' || game.mode === 'play') {
+      game.loadFloor(game.floorIndex);
     }
+    return;
   }
+  keys.add(event.code);
 });
 
-function readInput() {
-  const has = (...codes) => codes.some((c) => keysDown.has(c));
-  return {
-    x: (has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0),
-    y: (has('KeyS', 'ArrowDown') ? 1 : 0) - (has('KeyW', 'ArrowUp') ? 1 : 0),
-    sneak: has('ShiftLeft', 'ShiftRight'),
-  };
+window.addEventListener('keyup', (event) => {
+  keys.delete(event.code);
+});
+
+canvas.addEventListener('mousedown', () => {
+  game.sound.resume();
+  pressStart();
+});
+
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot) {
+  applyShot(game, shot);
+  game.frozen = true;
 }
 
-// ------------------------------------------------------------- the loop
-
-let lastStamp = performance.now();
-let courierStrideBank = 0;
-
+let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.05, (now - lastStamp) / 1000);
-  lastStamp = now;
-  const time = now / 1000;
-  game.stateTime += dt;
-
-  if (game.state === 'playing' && !game.staged) {
-    game.elapsed += dt;
-    for (const guard of game.guards) {
-      guard.update(dt, time);
-      guard.strideBank += guard.stepAccumulator;
-      if (guard.strideBank > 26) {
-        guard.strideBank = 0;
-        const d = Math.hypot(guard.x - game.player.x, guard.y - game.player.y);
-        sound.wardenStep(Math.max(0, 1 - d / 430));
-      }
-    }
-    game.player.update(dt, readInput(), game.grid);
-    courierStrideBank += game.player.stride;
-    const strideAt = game.player.sneaking ? 20 : 27;
-    if (courierStrideBank > strideAt) {
-      courierStrideBank = 0;
-      sound.courierStep(game.player.sneaking);
-    }
-
-    const { seenNow } = updateDetection(game, dt, time);
-    game.seenNow = seenNow;
-
-    if (game.detection >= 1 || touchesGuard(game)) {
-      game.attempts += 1;
-      sound.alarm();
-      setState('caught');
-    } else if (onExit(game)) {
-      sound.chime();
-      setState(game.levelIndex + 1 >= LEVELS.length ? 'won' : 'clear');
-    }
-  }
-
-  drawScene(ctx, game, time);
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!game.frozen && game.mode === 'play') update(dt);
+  drawScene(ctx, game);
+  if (!window.__ready) window.__ready = true;
   requestAnimationFrame(frame);
 }
 
-// ------------------------------------------------------------- boot
-
-game.loadLevel(0);
-const shot = readShotName();
-if (shot) stageShot(game, shot);
-announce('Quiet Vault. Press Enter to begin the run.');
 requestAnimationFrame(frame);
 
-// A handle for automated play-tests (and curious players in devtools):
-// window.__quietVault.state reads the state machine, .player the courier.
-window.__quietVault = game;
+// Keep the canvas honest about its size if the page ever resizes it.
+if (canvas.width !== VIEW_W || canvas.height !== VIEW_H) {
+  canvas.width = VIEW_W;
+  canvas.height = VIEW_H;
+}
